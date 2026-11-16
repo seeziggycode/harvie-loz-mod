@@ -1,0 +1,74 @@
+name: Build aarch64
+
+# Builds Ship of Harkinian with Zelda's Errands compiled in, for the
+# Anbernic RG40XX H (Allwinner H700, aarch64). Uses a native ARM runner, so
+# there is no cross-toolchain to maintain - this mirrors how Shipwright's own
+# generate-builds.yml produces its aarch64 artifact.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: mod
+
+      - name: Check out Shipwright (pinned)
+        run: |
+          git clone https://github.com/HarbourMasters/Shipwright.git shipwright
+          cd shipwright
+          git checkout d4bf6528a3bb242bc5d862e4f1ab2b6d385c157b
+          git submodule update --init --recursive --depth 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $(cat shipwright/linux-build-deps/apt.txt) ccache
+
+      - name: Graft the mod into the tree
+        run: |
+          mkdir -p shipwright/soh/soh/Enhancements/ZeldasErrands
+          cp mod/src/*.cpp shipwright/soh/soh/Enhancements/ZeldasErrands/
+          ls -l shipwright/soh/soh/Enhancements/ZeldasErrands/
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: aarch64-ccache-${{ github.sha }}
+          restore-keys: aarch64-ccache-
+
+      - name: Configure
+        run: |
+          cd shipwright
+          cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja \
+            -DCMAKE_BUILD_TYPE:STRING=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cd shipwright && cmake --build build-cmake --target soh -j$(nproc)
+
+      - name: Generate the port asset archive
+        run: cd shipwright && cmake --build build-cmake --target GenerateSohOtr
+
+      - name: Confirm the mod is actually in the binary
+        run: |
+          cd shipwright
+          test -f build-cmake/soh/CMakeFiles/soh.dir/soh/Enhancements/ZeldasErrands/ZeldasErrands.cpp.o \
+            || { echo "mod object missing - it was not compiled in"; exit 1; }
+          echo "mod object present"
+          file build-cmake/soh/soh.elf
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: soh-aarch64-zeldas-errands
+          path: |
+            shipwright/build-cmake/soh/soh.elf
+            shipwright/build-cmake/soh/soh.o2r

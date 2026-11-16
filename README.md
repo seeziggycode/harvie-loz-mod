@@ -31,9 +31,12 @@ not six bespoke quests.
 | Safety rails | Infinite health, frozen midday, instant text, no forced dialog |
 | Starting save | Child, Kakariko front gate, midday |
 | Mod slot | `Zeldas Errands 0.1.o2r` loads and registers in the mod menu |
-| Cucco Round-Up | Vanilla, playable |
-| The other five errands | Not built |
-| Sparkle/glow markers | Not built |
+| Quest engine | Built: generic "carry N things to a place" driver, compiles and boots |
+| Cucco Round-Up | Wired to the engine with coordinates read from `En_Niw_Lady` |
+| Sparkle markers | Built: a pulse on the drop-off, a burst on completion |
+| Completion + reward | Built: sticky per-errand CVar, chime and sparkle burst |
+| Survey mode | Built: logs the player's position so drop-offs can be measured, not guessed |
+| The other five errands | Table rows awaiting surveyed coordinates |
 | Festival finale | Not built |
 
 ## Build target
@@ -41,3 +44,41 @@ not six bespoke quests.
 Shipwright fork, built for aarch64 via the upstream CI's `ubuntu-22.04-arm`
 runner, installed as a separate port so PortMaster does not overwrite it and
 the existing Ship of Harkinian install stays untouched.
+
+
+## Implementation
+
+`src/ZeldasErrands.cpp` registers two hooks through `GameInteractor`:
+`OnSceneInit` to reset per-visit state, and `OnGameFrameUpdate` to run the
+driver while the player is in Kakariko (scene `0x52`).
+
+The driver counts qualifying actors inside a box around the drop-off, exactly
+as `En_Niw_Lady` does. An errand is one row:
+
+```cpp
+{ "cuccos", ACTOR_EN_NIW, 330.0f, 1610.0f, 90.0f, 190.0f, 7 },
+```
+
+Only coordinates verified from the decompiled source appear in that table. The
+cucco pen's centre and tolerances come straight out of `En_Niw_Lady`'s counting
+loop. Further errands need their drop-offs measured in-game first — enable
+`gEnhancements.ZeldasErrandsSurvey`, walk to the spot, and read the position
+out of the log. Guessed coordinates put objects inside walls.
+
+## Settings
+
+| CVar | Effect |
+| --- | --- |
+| `gEnhancements.ZeldasErrands` | Master switch |
+| `gEnhancements.ZeldasErrandsSurvey` | Log the player's position twice a second |
+| `gEnhancements.ZE_<key>` | Per-errand completion, sticky |
+
+## Building
+
+`.github/workflows/build-aarch64.yml` builds on a native `ubuntu-22.04-arm`
+runner: it clones Shipwright pinned to the commit this was developed against,
+grafts `src/` into `soh/soh/Enhancements/ZeldasErrands/`, builds, and fails the
+job if the mod's object file is missing from the build. Artifacts are
+`soh.elf` and `soh.o2r`.
+
+Pinned upstream: Shipwright `d4bf6528`, libultraship `da6daf1a`.
