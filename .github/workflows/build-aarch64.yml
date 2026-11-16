@@ -37,7 +37,7 @@ jobs:
       - name: Graft the mod into the tree
         run: |
           mkdir -p shipwright/soh/soh/Enhancements/ZeldasErrands
-          cp mod/src/*.cpp shipwright/soh/soh/Enhancements/ZeldasErrands/
+          cp mod/src/*.cpp mod/src/*.h shipwright/soh/soh/Enhancements/ZeldasErrands/
           ls -l shipwright/soh/soh/Enhancements/ZeldasErrands/
 
       - name: Cache ccache
@@ -63,9 +63,11 @@ jobs:
       - name: Confirm the mod is actually in the binary
         run: |
           cd shipwright
-          test -f build-cmake/soh/CMakeFiles/soh.dir/soh/Enhancements/ZeldasErrands/ZeldasErrands.cpp.o \
-            || { echo "mod object missing - it was not compiled in"; exit 1; }
-          echo "mod object present"
+          for f in ZeldasErrands ZEParty ZEGuest ZEDecor ZETest; do
+            test -f build-cmake/soh/CMakeFiles/soh.dir/soh/Enhancements/ZeldasErrands/$f.cpp.o \
+              || { echo "mod object $f missing - it was not compiled in"; exit 1; }
+          done
+          echo "mod objects present"
           file build-cmake/soh/soh.elf
 
       - name: Upload
