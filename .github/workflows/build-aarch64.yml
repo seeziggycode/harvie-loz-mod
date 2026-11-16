@@ -32,7 +32,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y $(cat shipwright/linux-build-deps/apt.txt) ccache
+          sudo apt-get install -y $(cat shipwright/linux-build-deps/apt.txt) ccache libgles-dev libegl-dev zip
 
       - name: Graft the mod into the tree
         run: |
@@ -52,6 +52,7 @@ jobs:
           cd shipwright
           cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja \
             -DCMAKE_BUILD_TYPE:STRING=Release \
+            -DUSE_OPENGLES=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
@@ -81,12 +82,18 @@ jobs:
       # Also publish as a release: Actions artifacts are served from Azure
       # blob storage, which the development environment cannot reach, whereas
       # release assets come from githubusercontent and can be fetched directly.
+      # The handheld is GLES-only and ships different library versions from
+      # this runner, so the payload carries its own libs (see the script).
       - name: Package
         run: |
-          cd shipwright/build-cmake/soh
-          tar czf "$GITHUB_WORKSPACE/soh-aarch64.tar.gz" soh.elf soh.o2r
           cd "$GITHUB_WORKSPACE"
-          sha256sum soh-aarch64.tar.gz | tee soh-aarch64.sha256
+          readelf -d shipwright/build-cmake/soh/soh.elf | grep NEEDED
+          readelf -d shipwright/build-cmake/soh/soh.elf | grep -q 'libGLESv2' || { echo "not a GLES build"; exit 1; }
+          readelf -d shipwright/build-cmake/soh/soh.elf | grep -q 'libOpenGL' && { echo "desktop GL linked"; exit 1; } || true
+          mod/tools/bundle-libs.sh shipwright/build-cmake/soh/soh.elf pkg
+          (cd pkg && zip -q -r -X "$GITHUB_WORKSPACE/soh-aarch64.zip" soh.elf.aarch64 libs.aarch64)
+          cp shipwright/build-cmake/soh/soh.o2r .
+          sha256sum soh-aarch64.zip soh.o2r | tee soh-aarch64.sha256
 
       - name: Publish release
         env:
@@ -94,7 +101,7 @@ jobs:
         run: |
           TAG="build-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
-            soh-aarch64.tar.gz soh-aarch64.sha256 \
+            soh-aarch64.zip soh.o2r soh-aarch64.sha256 \
             --title "aarch64 build ${GITHUB_RUN_NUMBER}" \
-            --notes "Ship of Harkinian for aarch64 with Zelda's Errands compiled in. Commit ${GITHUB_SHA}." \
+            --notes "Ship of Harkinian (GLES) for the RG40XX H with Zelda's Errands compiled in, plus the libraries the device lacks. Commit ${GITHUB_SHA}." \
             --repo "$GITHUB_REPOSITORY"
