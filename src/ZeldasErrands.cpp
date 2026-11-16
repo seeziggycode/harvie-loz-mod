@@ -93,6 +93,64 @@ static void SparkleAt(f32 x, f32 y, f32 z) {
     EffectSsKiraKira_SpawnSmallYellow(gPlayState, &pos, &vel, &accel);
 }
 
+
+// ---------------------------------------------------------------------------
+// The party.
+//
+// She was told there is a party waiting for her in Kakariko, so there has to
+// be one, every time she arrives - not once, and not somewhere she has to find.
+//
+// It assembles AROUND HER rather than at fixed coordinates. That is deliberate:
+// this village has never been surveyed, and a guessed coordinate puts guests
+// inside a wall. Spawning relative to the player cannot miss.
+//
+// Guests are cuccos. Three reasons: she loves them, the vanilla cucco quest
+// means OBJECT_NIW is already loaded in this scene, and Actor_Spawn returns
+// NULL rather than crashing if an object is ever absent - so the worst case is
+// a quieter party, never a broken game.
+// ---------------------------------------------------------------------------
+
+static const int kGuests = 8;
+static const f32 kGuestRing = 110.0f;
+static const u32 kPartyDelay = 70;   // let the scene settle before it starts
+
+static bool sPartyThrown = false;
+
+static void Confetti(f32 x, f32 y, f32 z, f32 spread) {
+    Vec3f pos = { x + (Rand_ZeroOne() - 0.5f) * spread, y + 40.0f + Rand_ZeroOne() * 40.0f,
+                  z + (Rand_ZeroOne() - 0.5f) * spread };
+    Vec3f vel = { 0.0f, -0.5f - Rand_ZeroOne(), 0.0f };
+    Vec3f accel = { 0.0f, -0.03f, 0.0f };
+    EffectSsKiraKira_SpawnSmallYellow(gPlayState, &pos, &vel, &accel);
+}
+
+static void ThrowParty() {
+    Player* player = GET_PLAYER(gPlayState);
+    if (player == NULL) {
+        return;
+    }
+    const f32 px = player->actor.world.pos.x;
+    const f32 py = player->actor.world.pos.y;
+    const f32 pz = player->actor.world.pos.z;
+
+    int arrived = 0;
+    for (int i = 0; i < kGuests; i++) {
+        const f32 ang = (2.0f * 3.14159265f * i) / kGuests;
+        Actor* guest = Actor_Spawn(&gPlayState->actorCtx, gPlayState, ACTOR_EN_NIW,
+                                   px + cosf(ang) * kGuestRing, py + 8.0f, pz + sinf(ang) * kGuestRing,
+                                   0, 0, 0, 0);
+        if (guest != NULL) {
+            arrived++;
+        }
+    }
+
+    Sfx_PlaySfxCentered(NA_SE_SY_GET_ITEM);
+    for (int b = 0; b < 40; b++) {
+        Confetti(px, py, pz, 260.0f);
+    }
+    LUSLOG_INFO("[ZeldasErrands] party thrown in Kakariko: {} of {} guests arrived", arrived, kGuests);
+}
+
 static void OnFrame() {
     if (!GameInteractor::IsSaveLoaded(true) || gPlayState == NULL) {
         return;
@@ -101,6 +159,21 @@ static void OnFrame() {
         return;
     }
     sFrame++;
+
+    // Throw the party shortly after she walks in, then keep a little confetti
+    // going so the village still feels like a party while she is in it. The
+    // rate is deliberately low: this handheld is fill-rate bound and alpha
+    // effects are exactly what makes it stutter.
+    if (!sPartyThrown && sFrame == kPartyDelay) {
+        sPartyThrown = true;
+        ThrowParty();
+    }
+    if (sPartyThrown && (sFrame % 14) == 0) {
+        Player* player = GET_PLAYER(gPlayState);
+        if (player != NULL) {
+            Confetti(player->actor.world.pos.x, player->actor.world.pos.y, player->actor.world.pos.z, 300.0f);
+        }
+    }
 
     // Survey mode: print where the player is standing, so a drop-off can be
     // measured in-game instead of guessed. Walk to a spot, read the log.
@@ -145,6 +218,7 @@ static void OnSceneLoad(int16_t sceneNum) {
         sWasComplete[i] = IsComplete(kErrands[i]);
     }
     sFrame = 0;
+    sPartyThrown = false;   // a party every visit, not once
 }
 
 } // namespace ZeldasErrands
