@@ -18,6 +18,7 @@
 #include "soh/Enhancements/game-interactor/GameInteractor_Hooks.h"
 #include "soh/ShipInit.hpp"
 #include "ZEParty.h"
+#include "ZEQuests.h"
 
 #include <chrono>
 #include <ctime>
@@ -34,6 +35,7 @@ extern PlayState* gPlayState;
 extern SaveContext gSaveContext;
 extern GameState* gGameState;
 void Sram_InitDebugSave(void);
+void Sram_OpenSave(void);
 extern EffectSsInfo sEffectSsInfo;
 }
 
@@ -41,6 +43,7 @@ extern EffectSsInfo sEffectSsInfo;
 #define CVAR_TEST_MAP CVAR_ENHANCEMENT("ZE_TestMap")
 #define CVAR_TEST_TOUR CVAR_ENHANCEMENT("ZE_TestTour")
 #define CVAR_TEST_PERF CVAR_ENHANCEMENT("ZE_TestPerf")
+#define CVAR_TEST_LOADFILE CVAR_ENHANCEMENT("ZE_TestLoadFile")
 
 namespace ZETest {
 
@@ -70,8 +73,26 @@ static void BootInto(s32 entrance) {
     GameInteractor_ExecuteOnLoadGame(gSaveContext.fileNum);
 }
 
+// --- load a real save slot, exactly as the file menu does --------------------
+static void LoadSlot(s32 slot) {
+    gSaveContext.fileNum = slot - 1;
+    gSaveContext.gameMode = GAMEMODE_NORMAL;
+    Sram_OpenSave();
+    gGameState->running = false;
+    SET_NEXT_GAMESTATE(gGameState, Play_Init, PlayState);
+    gSaveContext.respawn[0].entranceIndex = ENTR_LOAD_OPENING;
+    gSaveContext.respawnFlag = 0;
+    gSaveContext.seqId = (u8)NA_BGM_DISABLED;
+    gSaveContext.natureAmbienceId = 0xFF;
+    gSaveContext.showTitleCard = true;
+    LUSLOG_INFO("ZELOAD slot %d: scene 0x%02X entrance 0x%03X", slot, gSaveContext.savedSceneNum,
+                gSaveContext.entranceIndex);
+}
+
 // --- floor heightmap ---------------------------------------------------------
-static const s32 kMapMin = -2400, kMapMax = 2400, kMapStep = 25;
+// A square around the spawn point (CVar ZE_TestMap = half-size in units; 1 = 2400).
+static s32 kMapMin = -2400, kMapMax = 2400, kMapStep = 25;
+static s32 sMapCx = 0, sMapCz = 0;
 static s32 sMapRow = 0;
 static bool sMapDone = false;
 
@@ -80,16 +101,16 @@ static void MapStep() {
         return;
     }
     // one row per frame keeps the game responsive while the map is taken
-    const s32 z = kMapMin + sMapRow * kMapStep;
-    std::string line = "ZEMAP " + std::to_string(z);
-    for (s32 x = kMapMin; x <= kMapMax; x += kMapStep) {
+    const s32 z = sMapCz + kMapMin + sMapRow * kMapStep;
+    std::string line = "ZEMAP " + std::to_string(z) + " x0=" + std::to_string(sMapCx + kMapMin);
+    for (s32 x = sMapCx + kMapMin; x <= sMapCx + kMapMax; x += kMapStep) {
         Vec3f pos = { (f32)x, 3000.0f, (f32)z };
         CollisionPoly* poly;
         f32 y = BgCheck_EntityRaycastFloor1(&gPlayState->colCtx, &poly, &pos);
         line += " " + std::to_string((s32)y);
     }
     LUSLOG_INFO("%s", line.c_str());
-    if (z >= kMapMax) {
+    if (z >= sMapCz + kMapMax) {
         sMapDone = true;
         LUSLOG_INFO("ZEMAP done");
     }
@@ -121,8 +142,43 @@ static void AnimStep() {
     ZEParty::SetLineupAnim(atoi(s.c_str()));
 }
 
+// /tmp/ze_say N      open text box N (hex) as if someone said it
+// /tmp/ze_done N     run the quest logic for "Zelda finished saying N"
+// /tmp/ze_kill       defeat every Deku Baba in the scene
+static std::string ReadOnce(const char* path, std::string& last) {
+    std::ifstream f(path);
+    std::string s;
+    if (!f || !std::getline(f, s) || s == last) {
+        return "";
+    }
+    last = s;
+    return s;
+}
+static std::string sLastSay, sLastDone, sLastKill;
+
+static void QuestStep() {
+    std::string s = ReadOnce("/tmp/ze_say", sLastSay);
+    if (!s.empty()) {
+        Message_StartTextbox(gPlayState, (u16)strtol(s.c_str(), NULL, 16), NULL);
+        LUSLOG_INFO("ZESAY 0x%s", s.c_str());
+    }
+    s = ReadOnce("/tmp/ze_done", sLastDone);
+    if (!s.empty()) {
+        ZEQuests::OnZeldaTalkDone((u16)strtol(s.c_str(), NULL, 16));
+    }
+    s = ReadOnce("/tmp/ze_kill", sLastKill);
+    if (!s.empty()) {
+        for (Actor* a = gPlayState->actorCtx.actorLists[ACTORCAT_ENEMY].head; a != NULL; a = a->next) {
+            if (a->id == ACTOR_EN_DEKUBABA) {
+                Actor_Kill(a);
+            }
+        }
+    }
+}
+
 static void TourStep() {
     AnimStep();
+    QuestStep();
     std::ifstream f("/tmp/ze_tour");
     std::string s;
     if (!f || !std::getline(f, s) || s == sLastTour) {
@@ -186,6 +242,8 @@ static bool sDumped = false;
 static void Register() {
     COND_HOOK(OnZTitleUpdate, CVarGetInteger(CVAR_TEST_BOOT, 0) != 0,
               [](void*) { BootInto(CVarGetInteger(CVAR_TEST_BOOT, 0)); });
+    COND_HOOK(OnZTitleUpdate, CVarGetInteger(CVAR_TEST_LOADFILE, 0) != 0,
+              [](void*) { LoadSlot(CVarGetInteger(CVAR_TEST_LOADFILE, 0)); });
 
     COND_HOOK(OnSceneSpawnActors, CVarGetInteger(CVAR_TEST_MAP, 0) != 0, []() {
         sMapRow = 0;
@@ -204,6 +262,14 @@ static void Register() {
                       if (!sDumped) {
                           sDumped = true;
                           Player* p = GET_PLAYER(gPlayState);
+                          s32 half = CVarGetInteger(CVAR_TEST_MAP, 0);
+                          if (half > 1) {
+                              kMapMin = -half;
+                              kMapMax = half;
+                              kMapStep = half >= 2400 ? 25 : 20;
+                              sMapCx = ((s32)p->actor.world.pos.x / kMapStep) * kMapStep;
+                              sMapCz = ((s32)p->actor.world.pos.z / kMapStep) * kMapStep;
+                          }
                           LUSLOG_INFO("ZESPAWN scene=0x%02X player=%.0f,%.0f,%.0f yaw=%d",
                                       gPlayState->sceneNum, p->actor.world.pos.x, p->actor.world.pos.y,
                                       p->actor.world.pos.z, (int)p->actor.shape.rot.y);
@@ -220,6 +286,6 @@ static void Register() {
               });
 }
 
-static RegisterShipInitFunc initFunc(Register, { CVAR_TEST_BOOT, CVAR_TEST_MAP, CVAR_TEST_TOUR, CVAR_TEST_PERF });
+static RegisterShipInitFunc initFunc(Register, { CVAR_TEST_BOOT, CVAR_TEST_MAP, CVAR_TEST_TOUR, CVAR_TEST_PERF, CVAR_TEST_LOADFILE });
 
 } // namespace ZETest

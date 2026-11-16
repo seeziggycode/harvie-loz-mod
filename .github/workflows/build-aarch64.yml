@@ -64,7 +64,7 @@ jobs:
       - name: Confirm the mod is actually in the binary
         run: |
           cd shipwright
-          for f in ZeldasErrands ZEParty ZEGuest ZEDecor ZETest; do
+          for f in ZeldasErrands ZEParty ZEGuest ZEDecor ZETest ZEQuests ZEFrameRate; do
             test -f build-cmake/soh/CMakeFiles/soh.dir/soh/Enhancements/ZeldasErrands/$f.cpp.o \
               || { echo "mod object $f missing - it was not compiled in"; exit 1; }
           done

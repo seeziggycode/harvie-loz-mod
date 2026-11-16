@@ -27,6 +27,7 @@
 #include "soh/ShipInit.hpp"
 #include "ZEParty.h"
 #include "ZETextures.h"
+#include "ZEQuests.h"
 
 #include <chrono>
 #include <cmath>
@@ -38,6 +39,10 @@ extern "C" {
 #include "variables.h"
 #include "overlays/actors/ovl_En_Niw/z_en_niw.h"
 extern PlayState* gPlayState;
+}
+
+namespace ZEFrameRate {
+bool AtLowestRate();
 }
 
 namespace ZEParty {
@@ -127,7 +132,8 @@ static void Govern(u32 frame) {
         sLogAccum = 0;
         sLogFrames = 0;
     }
-    if (sAvgMs > kGameFrameMs * 1.15 && sQuality < 2) {
+    // the frame rate steps down first (60 -> 30 -> 20); extras go only if 20 fps still can't keep up
+    if (sAvgMs > kGameFrameMs * 1.15 && sQuality < 2 && ZEFrameRate::AtLowestRate()) {
         if (++sSlowFrames >= 40) {
             sQuality++;
             sSlowFrames = 0;
@@ -214,6 +220,10 @@ static void SetUpParty() {
     for (const Placement& p : kPlacements) {
         if (CVarGetInteger(CVAR_ENHANCEMENT("ZE_TestNoGuests"), 0)) {
             break;
+        }
+        // the brown puppy only sits by Zelda once she has been found and brought home
+        if (p.ch == GUEST_DOG && (p.anim & 0x80) && ZEQuests::GetPuppyState() != ZEQuests::PUPPY_HOME) {
+            continue;
         }
         Actor_Spawn(ac, gPlayState, GuestActorId(), p.x, p.y, p.z, 0, p.yaw, 0, GuestParams(p.ch, p.anim));
     }
@@ -308,6 +318,10 @@ static void OnFrame() {
         return;
     }
 
+    // Zelda twinkles whenever she has something new to say
+    if (ZEQuests::ZeldaHasNews() && (sFrame % 12) == 0) {
+        Confetti(gZeldaPos, 60.0f);
+    }
     if (sQuality >= 1) {
         return;
     }

@@ -17,6 +17,7 @@
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "soh/ShipInit.hpp"
 #include "ZEParty.h"
+#include "ZEQuests.h"
 
 #include <array>
 #include <cmath>
@@ -167,6 +168,7 @@ void RegisterZeldasErrands() {
     }
     // The Kakariko party shares the mod's on/off switch.
     ZEParty::RegisterParty();
+    ZEQuests::Register();
 }
 
 static RegisterShipInitFunc initFuncZeldasErrands(RegisterZeldasErrands, { CVAR_ERRANDS_ON });

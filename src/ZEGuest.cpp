@@ -16,8 +16,10 @@
 #include "soh/ActorDB.h"
 #include "soh/Enhancements/game-interactor/GameInteractor.h"
 #include "ZEParty.h"
+#include "ZEQuests.h"
 #include "soh/frame_interpolation.h"
 
+#include <algorithm>
 #include <cmath>
 
 extern "C" {
@@ -159,6 +161,9 @@ typedef struct {
     bool alt; // dogs: brown instead of cream
     s16 animTimer;
     u8 phase;
+    bool talking;
+    bool questPuppy; // the brown puppy of the "lost puppy" errand
+    s8 curAnim;
 } ZEGuest;
 
 // Adult Zelda's poses, from the En_Zl3 animations checked in the harness lineup
@@ -184,9 +189,12 @@ static void Guest_Init(Actor* thisx, PlayState* play) {
 
     self->animTimer = 0;
     self->phase = 0;
+    self->talking = false;
+    self->curAnim = -1;
     self->ch = (u16)thisx->params >> 8;
-    self->anim = thisx->params & 0x7F;
+    self->anim = thisx->params & 0x3F;
     self->alt = (thisx->params & 0x80) != 0;
+    self->questPuppy = (thisx->params & 0x40) != 0;
     if (self->ch >= GUEST_CHAR_MAX) {
         Actor_Kill(thisx);
         return;
@@ -226,7 +234,74 @@ static void Guest_Init(Actor* thisx, PlayState* play) {
     }
     if (self->ch == GUEST_ZELDA) {
         gZeldaPos = thisx->world.pos;
+        thisx->flags |= ACTOR_FLAG_ATTENTION_ENABLED | ACTOR_FLAG_FRIENDLY; // press A to talk
     }
+    if (self->questPuppy) {
+        thisx->gravity = -1.0f;
+        thisx->colChkInfo.mass = 50;
+        thisx->flags |= ACTOR_FLAG_UPDATE_CULLING_DISABLED; // keeps up when off screen
+    }
+}
+
+static void PlayDogAnim(ZEGuest* self, s8 idx) {
+    if (self->curAnim == idx) {
+        return;
+    }
+    self->curAnim = idx;
+    AnimationHeader* a = kGuests[GUEST_DOG].anims[idx];
+    Animation_Change(&self->skelAnime, a, 1.0f, 0.0f, Animation_GetLastFrame(a), ANIMMODE_LOOP, -4.0f);
+}
+
+// The lost puppy: sits by the river until Harvie comes close, then follows her
+// (across scenes - the quest module respawns her beside Harvie) until she is
+// back at Zelda's side.
+static void Puppy_Update(ZEGuest* self, PlayState* play) {
+    Actor* thisx = &self->actor;
+    ZEQuests::PuppyState st = ZEQuests::GetPuppyState();
+    Player* player = GET_PLAYER(play);
+    Vec3f target = player->actor.world.pos;
+    f32 stop = 55.0f;
+
+    if (st == ZEQuests::PUPPY_HIDDEN) {
+        Actor_Kill(thisx);
+        return;
+    }
+    if (st == ZEQuests::PUPPY_LOST) {
+        PlayDogAnim(self, 0); // sit
+        thisx->speedXZ = 0.0f;
+        if (thisx->xzDistToPlayer < 90.0f) {
+            Audio_PlayActorSound2(thisx, NA_SE_EV_SMALL_DOG_BARK);
+            ZEQuests::OnPuppyFound();
+        }
+    } else {
+        if (st == ZEQuests::PUPPY_HOME) {
+            target = { gZeldaPos.x + 45.0f, gZeldaPos.y, gZeldaPos.z + 60.0f }; // beside Zelda
+            stop = 12.0f;
+        } else if (play->sceneNum == SCENE_KAKARIKO_VILLAGE &&
+                   Math_Vec3f_DistXZ(&thisx->world.pos, &gZeldaPos) < 280.0f) {
+            ZEQuests::OnPuppyHome();
+        }
+        f32 d = Math_Vec3f_DistXZ(&thisx->world.pos, &target);
+        if (d > 700.0f && st == ZEQuests::PUPPY_FOLLOWING) {
+            // left far behind (a ledge, a wall): catch up beside her
+            thisx->world.pos = { target.x - 40.0f, target.y + 20.0f, target.z - 40.0f };
+            d = 60.0f;
+        }
+        if (d > stop) {
+            s16 yaw = Math_Vec3f_Yaw(&thisx->world.pos, &target);
+            Math_SmoothStepToS(&thisx->shape.rot.y, yaw, 4, 0x1000, 0x100);
+            thisx->world.rot.y = thisx->shape.rot.y;
+            Math_SmoothStepToF(&thisx->speedXZ, std::min(7.0f, 2.0f + d * 0.04f), 0.4f, 1.0f, 0.0f);
+            PlayDogAnim(self, 4); // walk
+        } else {
+            Math_SmoothStepToF(&thisx->speedXZ, 0.0f, 0.5f, 1.0f, 0.0f);
+            if (thisx->speedXZ < 0.5f) {
+                PlayDogAnim(self, 0); // sit
+            }
+        }
+    }
+    Actor_MoveXZGravity(thisx);
+    Actor_UpdateBgCheckInfo(play, thisx, 20.0f, 15.0f, 20.0f, 5);
 }
 
 static void Guest_Destroy(Actor* thisx, PlayState* play) {
@@ -272,6 +347,28 @@ static void Guest_Update(Actor* thisx, PlayState* play) {
     const GuestDef& g = kGuests[self->ch];
 
     SkelAnime_Update(&self->skelAnime);
+
+    if (self->questPuppy) {
+        Puppy_Update(self, play);
+        Collider_UpdateCylinder(thisx, &self->collider);
+        CollisionCheck_SetOC(play, &play->colChkCtx, &self->collider.base);
+        return;
+    }
+
+    // Zelda: press A to talk. What she says comes from the quest line.
+    if (self->ch == GUEST_ZELDA) {
+        if (self->talking) {
+            if (Actor_TextboxIsClosing(thisx, play)) {
+                self->talking = false;
+                ZEQuests::OnZeldaTalkDone(thisx->textId);
+            }
+        } else if (Actor_ProcessTalkRequest(thisx, play)) {
+            self->talking = true;
+        } else {
+            thisx->textId = ZEQuests::ZeldaTextId();
+            Actor_OfferTalk(thisx, play, 110.0f);
+        }
+    }
 
     // Darunia works through his four dance loops, blending between them
     if (self->ch == GUEST_DARUNIA && ++self->animTimer >= 140) {

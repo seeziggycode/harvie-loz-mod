@@ -167,7 +167,7 @@ static void Bunting(Mesh& m, Vec3f a, Vec3f b, s16 time) {
         return { a.x + dx * t, a.y + (b.y - a.y) * t - sag * 4.0f * t * (1.0f - t), a.z + dz * t };
     };
     Color_RGB8 cord = { 245, 240, 225 };
-    const int cordSegs = 12;
+    const int cordSegs = 6;
     for (int i = 0; i < cordSegs; i++) {
         Vec3f p = at((f32)i / cordSegs), q = at((f32)(i + 1) / cordSegs);
         m.Quad(p, q, { q.x, q.y - 1.6f, q.z }, { p.x, p.y - 1.6f, p.z }, cord);
@@ -184,7 +184,7 @@ static void Bunting(Mesh& m, Vec3f a, Vec3f b, s16 time) {
 
 static void Maypole(Mesh& m, f32 x, f32 y, f32 z, s16 time) {
     const f32 h = 360.0f;
-    const int sides = 8, levels = 18;
+    const int sides = 6, levels = 12;
     const f32 r = 6.0f;
     Color_RGB8 white = { 250, 245, 240 }, pink = { 255, 105, 170 };
     // a spiral-striped octagonal pole
@@ -310,7 +310,7 @@ static void Decor_Draw(Actor* thisx, PlayState* play) {
         if (!Visible(play, p.x, y + kPoleHeight * 0.5f, p.z, kPoleHeight * 0.6f)) {
             continue;
         }
-        StripedPost(mesh, p.x, p.z, y, y + kPoleHeight, kPoleHalf, red, white, 9);
+        StripedPost(mesh, p.x, p.z, y, y + kPoleHeight, kPoleHalf, red, white, 6);
         Lantern(mesh, p.x, y + kPoleHeight + 16.0f, p.z, kLanternColors[p.lantern]);
     }
     for (size_t i = 0; i < ARRAY_COUNT(kBunting); i++) {
