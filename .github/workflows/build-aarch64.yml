@@ -10,6 +10,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
@@ -72,3 +75,24 @@ jobs:
           path: |
             shipwright/build-cmake/soh/soh.elf
             shipwright/build-cmake/soh/soh.o2r
+
+      # Also publish as a release: Actions artifacts are served from Azure
+      # blob storage, which the development environment cannot reach, whereas
+      # release assets come from githubusercontent and can be fetched directly.
+      - name: Package
+        run: |
+          cd shipwright/build-cmake/soh
+          tar czf "$GITHUB_WORKSPACE/soh-aarch64.tar.gz" soh.elf soh.o2r
+          cd "$GITHUB_WORKSPACE"
+          sha256sum soh-aarch64.tar.gz | tee soh-aarch64.sha256
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            soh-aarch64.tar.gz soh-aarch64.sha256 \
+            --title "aarch64 build ${GITHUB_RUN_NUMBER}" \
+            --notes "Ship of Harkinian for aarch64 with Zelda's Errands compiled in. Commit ${GITHUB_SHA}." \
+            --repo "$GITHUB_REPOSITORY"
